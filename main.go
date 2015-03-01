@@ -1,4 +1,6 @@
-package main
+// Command twitter-archive provides a simple tool for fetching a user's
+// timeline from Twitter.
+package ta
 
 import (
 	"bufio"
@@ -47,6 +49,7 @@ func NewArchive(api *anaconda.TwitterApi, user string, nort, noat bool) *Archive
 	}
 }
 
+// Params configures URL parameters for a request to the Twitter API.
 func (a *Archive) Params() url.Values {
 	v := url.Values(make(map[string][]string))
 	v.Add("screen_name", a.user)
@@ -63,8 +66,9 @@ func (a *Archive) Params() url.Values {
 	return v
 }
 
-// ArchiveAll fetches upto 3200 of the user's most recent tweets.
-func (a *Archive) Archive() error {
+// Fetch recursively fetches tweets from a user's timeline, in batches
+// of descending chronological order.
+func (a *Archive) Fetch() error {
 	results, err := a.api.GetUserTimeline(a.Params())
 	if err != nil {
 		return err
@@ -79,29 +83,7 @@ func (a *Archive) Archive() error {
 
 	if len(results) > 0 {
 		a.MaxId = results[len(results)-1].Id - 1
-		return a.Archive()
-	}
-	return nil
-}
-
-// UpdateSince fetches upto the 3200 most recently published tweets
-// published after `since`.
-func (a *Archive) Update() error {
-	results, err := a.api.GetUserTimeline(a.Params())
-	if err != nil {
-		return err
-	}
-
-	// Process results
-	for _, tweet := range results {
-		if err := json.NewEncoder(a.w).Encode(tweet); err != nil {
-			return err
-		}
-	}
-
-	if len(results) > 0 {
-		a.MaxId = results[len(results)-1].Id - 1
-		return a.Update()
+		return a.Fetch()
 	}
 	return nil
 }
@@ -125,16 +107,23 @@ func (a *Archive) UpdateArchive(pth string) error {
 		return err
 	}
 
+	// Set the target user, using the archived tweet.
+	a.user = t.User.ScreenName
+
 	// Setup a temporary file
 	td, err := ioutil.TempFile(os.TempDir(), "")
 	if err != nil {
 		return err
 	}
+
 	// Redirect Archive to temporary file.
 	a.w = td
+
+	// Write latest updates to head of the file. By setting SinceId we
+	// will only fetch tweets later than the most recent one we have
+	// archived.
 	a.SinceId = t.Id
-	// Write latest updates to head of the file
-	if err := a.Update(); err != nil {
+	if err := a.Fetch(); err != nil {
 		return err
 	}
 
@@ -167,7 +156,8 @@ func main() {
 	flag.Parse()
 
 	user := flag.Arg(0)
-	if user == "" {
+	if user == "" && *a == "" {
+		// Need to know the target user if it's full archive.
 		log.Fatal("User argument required.")
 	}
 
@@ -206,10 +196,7 @@ func main() {
 		if err := archive.UpdateArchive(*a); err != nil {
 			log.Fatal(err)
 		}
-		return
-	}
-	// Run a full archive.
-	if err := archive.Archive(); err != nil {
+	} else if err := archive.Fetch(); err != nil {
 		log.Fatal(err)
 	}
 }
